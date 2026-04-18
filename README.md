@@ -61,15 +61,22 @@ We compare four schedules:
 
 ## Results
 
+> **Results pending fresh run.** All experiments have been reset for a full rerun with the expanded contrastive dataset. Tables will be populated after the run completes on the GPU server.
+
 ### Cross-Architecture CKA
 
-Experiment 07 computes linear CKA (Kornblith et al., 2019) between contrastive activation diff matrices at five relative depth fractions (0%, 25%, 50%, 75%, 100%) across all four architecture families. The resulting 4×4 CKA heatmap shows high similarity (CKA > 0.65) between LLaMA, Qwen, and Mistral in the middle 25–75% depth range, with Gemma showing moderate alignment (CKA ≈ 0.45–0.55). Self-similarity on the diagonal is 1.0 by definition. These results indicate that behavioural geometry — the subspace spanned by contrastive activation differences — is largely shared across architectures, validating the hypothesis that steering directions can be transferred across model families with minimal adaptation.
+Experiment `01_cross_arch_comparison.py` computes linear CKA (Kornblith et al., 2019) between contrastive activation diff matrices at five relative depth fractions (0%, 25%, 50%, 75%, 100%) across all four architecture families, producing a 4×4 CKA heatmap per behaviour.
 
-Principal-angle cosine similarity between PCA subspaces at matched depth fractions mirrors the CKA findings, with mean subspace cosine > 0.7 for LLaMA–Qwen and LLaMA–Mistral pairs at mid-depth layers.
+| Architecture pair | Mid-layer CKA (25–75% depth) |
+|---|---|
+| LLaMA–Qwen | — |
+| LLaMA–Mistral | — |
+| LLaMA–Gemma | — |
+| Qwen–Mistral | — |
 
 ### Lossless Compilation Proof
 
-Experiment 08 provides a direct lossless compilation verification. After fitting a Baker on sycophancy suppression prompts with `k_calibration="auto"`, we:
+Experiment `02_fuse_and_hub_demo.py` provides a direct lossless compilation verification. After fitting a Baker on sycophancy suppression prompts with `k_calibration="auto"`, we:
 1. Run `baker.generate(test_prompts, alpha=1.0)` with the forward hook active.
 2. Call `baker.save_fused_model(path, alpha=1.0)` to produce the fused checkpoint.
 3. Delete the Baker and reload the checkpoint with `AutoModelForCausalLM.from_pretrained`.
@@ -81,16 +88,16 @@ The two outputs are numerically identical (L∞ distance < 1e-5 on logits), conf
 
 ## Planned Experiments
 
-| Experiment | Description | Status |
-|---|---|---|
-| Collapse threshold calibration | Sweep alpha on calibration set; fit `K_max(l)` per layer | Planned |
-| Ramp schedule comparison | Flat vs linear vs cosine-bell vs norm-inverse ablation | Planned |
-| TruthfulQA benchmark | MC accuracy delta under each schedule | Planned |
-| Sycophancy eval | Win-rate against GPT-4 judge on sycophancy probes | Planned |
-| Refusal reinforcement | Jailbreak success rate before/after fusion | Planned |
-| Direction transfer | Transfer directions from LLaMA to Mistral via HF Hub adapter | Planned |
-| Permutation invariance | Confirm PCA subspaces are invariant to neuron permutations | Done (Exp 06) |
-| Cross-arch CKA | CKA heatmap across 4 architecture families | Done (Exp 07) |
+| # | Experiment | Description | Status |
+|---|---|---|---|
+| 01 | Cross-arch CKA | CKA heatmap across 4 architecture families | Ready to run |
+| 02 | Fuse and Hub demo | End-to-end fusion + lossless proof + Hub push | Ready to run |
+| 03 | Collapse threshold | Sweep alpha; fit `K_max(l)` per layer before perplexity spikes | Planned |
+| 04 | Ramp schedule comparison | Flat vs linear vs cosine-bell vs norm-inverse ablation | Planned |
+| 05 | TruthfulQA benchmark | MC accuracy delta under each ramp schedule | Planned |
+| 06 | Sycophancy eval | Win-rate against GPT-4 judge on sycophancy suppression probes | Planned |
+| 07 | Refusal reinforcement | Jailbreak success rate before/after fusion | Planned |
+| 08 | Direction transfer | Transfer directions from LLaMA to Mistral via HF Hub adapter | Planned |
 
 ---
 
@@ -105,9 +112,8 @@ activation_vectors_as_weights/
 │   ├── extractor.py       # ActivationExtractor: hook-based residual stream extraction
 │   └── model_utils.py     # ModelInfo, detect_model_info, get_layer_module, arch registry
 ├── experiments/
-│   ├── 02_contrastive_extraction.py   # Extract contrastive diffs + fit PCA directions
-│   ├── 07_cross_arch_comparison.py    # CKA cross-architecture comparison
-│   └── 08_fuse_and_hub_demo.py        # End-to-end fusion + Hub push demo
+│   ├── 01_cross_arch_comparison.py    # CKA cross-architecture comparison
+│   └── 02_fuse_and_hub_demo.py        # End-to-end fusion + Hub push demo
 ├── tests/
 │   ├── conftest.py
 │   ├── unit/
