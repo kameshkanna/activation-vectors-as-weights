@@ -1,5 +1,5 @@
 """
-experiments/07_cross_arch_comparison.py
+experiments/01_cross_arch_comparison.py
 
 Cross-Architecture Comparison — evidence for universal behavioral geometry.
 
@@ -41,7 +41,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-logger = logging.getLogger("07_cross_arch_comparison")
+logger = logging.getLogger("01_cross_arch_comparison")
 
 # ---------------------------------------------------------------------------
 # Default model list (overridable via CLI)

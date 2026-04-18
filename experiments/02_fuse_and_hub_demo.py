@@ -1,5 +1,5 @@
 """
-experiments/08_fuse_and_hub_demo.py
+experiments/02_fuse_and_hub_demo.py
 
 End-to-end proof of the activation-baking adapter ecosystem.
 
@@ -21,7 +21,7 @@ specialised inference code.
 Usage
 -----
 # Full demo: fit, fuse, push, reload
-python experiments/08_fuse_and_hub_demo.py \\
+python experiments/02_fuse_and_hub_demo.py \\
     --model meta-llama/Llama-3.1-8B-Instruct \\
     --adapter-hub-id Kameshr/Llama-3B-Syco \\
     --fused-hub-id   Kameshr/Llama-3B-Syco-fused \\
@@ -29,14 +29,14 @@ python experiments/08_fuse_and_hub_demo.py \\
     --device cuda
 
 # Fit from scratch (no pre-existing adapter)
-python experiments/08_fuse_and_hub_demo.py \\
+python experiments/02_fuse_and_hub_demo.py \\
     --model meta-llama/Llama-3.1-8B-Instruct \\
     --fused-hub-id Kameshr/Llama-3B-Syco-fused \\
     --behavior sycophancy_suppression \\
     --device cuda
 
 # Dry run (no Hub push, local paths only)
-python experiments/08_fuse_and_hub_demo.py \\
+python experiments/02_fuse_and_hub_demo.py \\
     --model meta-llama/Llama-3.1-8B-Instruct \\
     --adapter-hub-id Kameshr/Llama-3B-Syco \\
     --fused-local-dir results/fused/llama_syco \\
@@ -67,7 +67,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-logger = logging.getLogger("08_fuse_and_hub_demo")
+logger = logging.getLogger("02_fuse_and_hub_demo")
 
 # ---------------------------------------------------------------------------
 # Contrastive prompt sets (embedded for self-contained demo)
