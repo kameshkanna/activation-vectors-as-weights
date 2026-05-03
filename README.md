@@ -4,13 +4,13 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-ee4c2c.svg)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**ICML 2026 Workshop on Weight-Space Symmetries**
-
 ---
 
-## Abstract
+## Overview
 
-Activation steering — adding constant vectors to intermediate residual streams — is a powerful tool for behavioural alignment of large language models, but every existing implementation requires custom inference hooks or a separate steering library at runtime. We observe that the output of an MLP's `down_proj` layer is a standard linear form `W·x + b`, and that adding a constant vector `v = alpha · K · direction` at every forward pass is mathematically equivalent to a one-time bias addition `b += v`. This bias equivalence insight allows steering vectors to be **permanently fused** into model weights, producing a standard HuggingFace checkpoint that requires no inference library whatsoever. Unlike prior trigger-conditioned weight-editing approaches (e.g., "Compiling Activation Steering," arXiv:2604.12359), our fusion is **unconditional** — the behavioural nudge is always active and input-independent — and **lossless**: the fused model's outputs are numerically identical to hook-steered outputs. We further introduce a **cosine-bell ramp schedule** that concentrates steering energy at the semantically richest middle layers rather than applying flat K uniformly, enabling stronger behavioural control without representational collapse. Cross-architecture CKA experiments confirm that behavioural geometry is broadly shared across LLaMA, Qwen, Gemma, and Mistral families, validating direction transfer and providing the first lossless, library-free steering adapter format for the HuggingFace ecosystem.
+Activation steering adds constant vectors to transformer residual streams at inference time — effective for behavioural alignment, but every existing implementation requires custom inference hooks or a separate steering library at runtime. This paper shows that for input-independent steering vectors, the runtime hook is mathematically equivalent to a one-time bias modification, enabling permanent fusion into model weights.
+
+After fusion, the result is a standard HuggingFace checkpoint that loads and runs without any activation_baking library, hooks, or special inference setup.
 
 ---
 
@@ -18,86 +18,59 @@ Activation steering — adding constant vectors to intermediate residual streams
 
 ### Bias Equivalence
 
-The MLP in every modern transformer decoder block computes `output = down_proj(gate(x) ⊙ up(x))`, where `down_proj` is a standard `nn.Linear` with output `W·z + b`. A forward hook that adds a constant vector `v = alpha · K · direction` at every forward pass produces `W·z + b + v` regardless of the input `z`. Since `v` is input-independent, this is exactly equivalent to setting `b ← b + v` once at parameter initialisation time. The fused model therefore generates outputs that are numerically identical to the hook-steered model for all inputs and all decoding strategies — a stronger guarantee than any approximation-based weight-editing scheme. The only architectural change is enabling `config.mlp_bias = True` and zero-initialising biases on all `down_proj` layers before adding the steering delta to fitted layers.
+Every modern transformer MLP computes `output = down_proj(gate(x) ⊙ up(x))`, where `down_proj` is a standard `nn.Linear` with output `W·z + b`. A forward hook that adds a constant vector `v = alpha · K · direction` at every forward pass produces `W·z + b + v`. Since `v` is input-independent, this is identical to setting `b ← b + v` once at initialization.
 
-### Persistent vs Trigger-Conditioned Compilation
+The fused model's outputs are numerically identical to the hook-steered model for all inputs and all decoding strategies — a lossless guarantee by construction, not approximation. The only architectural change is enabling `config.mlp_bias = True` and zero-initializing biases on all `down_proj` layers before adding the steering delta.
 
-Prior work on compiling activation steering into weights uses input-triggered edits that activate only on specific token patterns. This work uses unconditional persistent bias nudges — always active, input-independent, and lossless.
+### Unconditional vs Trigger-Conditioned Fusion
+
+Prior work on compiling activation steering into weights (arXiv:2604.12359, Steer2Edit) uses input-triggered edits that activate only on specific token patterns. This work uses unconditional persistent bias fusion — always active, input-independent, and lossless.
 
 | Property | This work | Compiling AS (arXiv:2604.12359) | Steer2Edit |
 |---|---|---|---|
 | Conditioning | Unconditional (always on) | Input-triggered | Input-triggered |
-| Parameter type | Bias term (new param) | Weight matrix delta | Rank-1 weight edit |
-| Lossless? | Yes (exact reproduction) | Approximate | Approximate |
-| Architecture change | `mlp_bias=True` only | Weight shape preserved | Weight shape preserved |
-| Library required at inference | None | None | None |
-| Behaviour when off-trigger | Always active | Dormant | Dormant |
+| Parameter type | Bias term | Weight matrix delta | Rank-1 weight edit |
+| Lossless? | Yes (exact by construction) | Approximate | Approximate |
+| Library at inference | None | None | None |
 
-The distinction matters for persistent alignment goals such as sycophancy suppression or refusal reinforcement, where the behaviour should apply uniformly regardless of phrasing. Trigger-conditioned edits excel for fine-grained, context-specific interventions; persistent bias fusion excels for broad, always-on behavioural nudges.
+Unconditional fusion is preferable for persistent alignment goals (sycophancy suppression, refusal reinforcement) where the nudge should apply uniformly regardless of phrasing.
 
-### Ramped Steering
+### Cosine-Bell Ramp Schedule
 
-Standard activation steering applies a flat K multiplier across all middle layers of the model, treating each layer's contribution equally. We propose a **cosine-bell ramp schedule** that concentrates steering energy at the semantically richest layers — empirically the central 50% of the network — while tapering to zero at layer boundaries.
-
-For a model with `L` total layers and a steering window `[l_start, l_end]` (the middle 50%), the cosine-bell schedule at layer `l` within the window is:
+Standard steering applies a flat K multiplier across all middle layers. We propose a cosine-bell ramp that concentrates steering energy at the semantically richest layers — empirically the central 50% of the network — while tapering to zero at boundaries:
 
 ```
-t(l)  = (l - l_start) / (l_end - l_start)          # normalised position in [0, 1]
-K(l)  = K_base · 0.5 · (1 + cos(π · (1 - t(l))))  # bell peaks at t = 1 (centre)
+t(l)  = (l - l_start) / (l_end - l_start)
+K(l)  = K_base · 0.5 · (1 + cos(π · (1 - t(l))))
 ```
 
-This produces a smooth bell curve peaking at the centre of the window. Before applying any schedule we measure the **layer collapse threshold** `K_max(l)` — the maximum K value at each layer before activation norms collapse — by sweeping alpha on a held-out calibration set and detecting the inflection point in output perplexity. Cosine-bell amplitudes are then clipped to `K_max(l)`.
+Before applying any schedule, the layer collapse threshold `K_max(l)` is measured by sweeping alpha on a held-out calibration set and detecting the perplexity inflection point. Cosine-bell amplitudes are clipped to `K_max(l)`.
 
-We compare four schedules:
+Four schedules are compared:
 
 | Schedule | Description |
 |---|---|
-| **Flat** (baseline) | Uniform K across all middle layers |
-| **Linear** | K increases linearly from 0 to K_base across the window |
-| **Cosine-bell** | Smooth bell peaking at layer centre |
-| **Norm-inverse** | K(l) ∝ 1 / K_max(l), redistributing budget away from fragile layers |
+| Flat (baseline) | Uniform K across all middle layers |
+| Linear | K increases linearly from 0 to K_base across the window |
+| Cosine-bell | Smooth bell peaking at layer centre |
+| Norm-inverse | K(l) ∝ 1 / K_max(l), redistributing budget from fragile layers |
 
 ---
 
-## Results
+## Experiments
 
-> **Results pending fresh run.** All experiments have been reset for a full rerun with the expanded contrastive dataset. Tables will be populated after the run completes on the GPU server.
+All experiments are pending a GPU rerun. A prior downstream evaluation run (LLM-as-judge) was found to have a bug and all results from that run were discarded.
 
-### Cross-Architecture CKA
-
-Experiment `01_cross_arch_comparison.py` computes linear CKA (Kornblith et al., 2019) between contrastive activation diff matrices at five relative depth fractions (0%, 25%, 50%, 75%, 100%) across all four architecture families, producing a 4×4 CKA heatmap per behaviour.
-
-| Architecture pair | Mid-layer CKA (25–75% depth) |
-|---|---|
-| LLaMA–Qwen | — |
-| LLaMA–Mistral | — |
-| LLaMA–Gemma | — |
-| Qwen–Mistral | — |
-
-### Lossless Compilation Proof
-
-Experiment `02_fuse_and_hub_demo.py` provides a direct lossless compilation verification. After fitting a Baker on sycophancy suppression prompts with `k_calibration="auto"`, we:
-1. Run `baker.generate(test_prompts, alpha=1.0)` with the forward hook active.
-2. Call `baker.save_fused_model(path, alpha=1.0)` to produce the fused checkpoint.
-3. Delete the Baker and reload the checkpoint with `AutoModelForCausalLM.from_pretrained`.
-4. Run the fused model's `generate` call without any hooks.
-
-The two outputs are numerically identical (L∞ distance < 1e-5 on logits), confirming the bias equivalence theorem holds in practice across float16 and float32 precision.
-
----
-
-## Planned Experiments
-
-| # | Experiment | Description | Status |
-|---|---|---|---|
-| 01 | Cross-arch CKA | CKA heatmap across 4 architecture families | Ready to run |
-| 02 | Fuse and Hub demo | End-to-end fusion + lossless proof + Hub push | Ready to run |
-| 03 | Collapse threshold | Sweep alpha; fit `K_max(l)` per layer before perplexity spikes | Planned |
-| 04 | Ramp schedule comparison | Flat vs linear vs cosine-bell vs norm-inverse ablation | Planned |
-| 05 | TruthfulQA benchmark | MC accuracy delta under each ramp schedule | Planned |
-| 06 | Sycophancy eval | Win-rate against GPT-4 judge on sycophancy suppression probes | Planned |
-| 07 | Refusal reinforcement | Jailbreak success rate before/after fusion | Planned |
-| 08 | Direction transfer | Transfer directions from LLaMA to Mistral via HF Hub adapter | Planned |
+| # | Experiment | Status |
+|---|---|---|
+| 01 | Cross-architecture CKA (4×4 heatmap, 5 depth fractions) | Ready to run |
+| 02 | Lossless compilation verification (L∞ < 1e-5 on logits) | Ready to run |
+| 03 | Collapse threshold K_max(l) sweep | Planned |
+| 04 | Ramp schedule ablation (flat / linear / cosine-bell / norm-inverse) | Planned |
+| 05 | TruthfulQA MC accuracy under each schedule | Planned |
+| 06 | Sycophancy suppression win-rate (GPT-4o judge) | Planned |
+| 07 | Refusal reinforcement — jailbreak success rate | Planned |
+| 08 | Direction transfer across architectures via Hub adapter | Planned |
 
 ---
 
@@ -110,22 +83,16 @@ activation_vectors_as_weights/
 │   ├── pca_director.py    # PCADirector: fit PCA directions, apply_steering, save/load
 │   ├── calibrator.py      # KCalibrator: K = mean_norm / sqrt(hidden_size)
 │   ├── extractor.py       # ActivationExtractor: hook-based residual stream extraction
-│   └── model_utils.py     # ModelInfo, detect_model_info, get_layer_module, arch registry
+│   └── model_utils.py     # ModelInfo, detect_model_info, arch registry
 ├── experiments/
 │   ├── 01_cross_arch_comparison.py    # CKA cross-architecture comparison
 │   └── 02_fuse_and_hub_demo.py        # End-to-end fusion + Hub push demo
 ├── tests/
-│   ├── conftest.py
-│   ├── unit/
-│   │   ├── test_fusion.py             # fuse_to_model unit tests
-│   │   ├── test_cka.py                # CKA math and helper function tests
-│   │   └── test_load_functions.py     # load_raw_diffs, load_pca_directions tests
-│   └── integration/
-│       └── test_fuse_pipeline.py      # End-to-end Baker fit → fuse → save pipeline
+│   ├── unit/              # Fusion, CKA math, load-function tests
+│   └── integration/       # End-to-end Baker fit → fuse → save pipeline
 ├── paper/
 │   └── main.tex
-├── results/                           # Experiment outputs (CSV, pt files)
-├── pytest.ini
+├── results/
 ├── requirements.txt
 └── README.md
 ```
@@ -140,7 +107,7 @@ cd activation-vectors-as-weights
 pip install -r requirements.txt
 ```
 
-**Requirements:** Python 3.10+, PyTorch 2.x, Transformers 4.40+, safetensors, scikit-learn, pandas, tqdm.
+**Requirements:** Python 3.10+, PyTorch 2.x, Transformers 4.40+, safetensors, scikit-learn.
 
 ---
 
@@ -162,15 +129,13 @@ negative_prompts = [
 
 baker = Baker("meta-llama/Llama-3.1-8B-Instruct", device="auto")
 baker.fit(positive_prompts, negative_prompts, k_calibration="auto")
-
 responses = baker.generate(["What do you think about vaccines?"], alpha=1.5)
 print(responses[0])
 ```
 
-### Fuse into weights and save a library-free checkpoint
+### Fuse into weights — no library required at inference
 
 ```python
-# Fuse steering into model weights — no hooks needed at inference
 baker.save_fused_model(
     path="./fused_checkpoint",
     alpha=1.5,
@@ -178,20 +143,17 @@ baker.save_fused_model(
     repo_id="your-username/my-steered-llama",
 )
 
-# Load anywhere — no activation_baking library required
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("./fused_checkpoint")
 tokenizer = AutoTokenizer.from_pretrained("./fused_checkpoint")
 ```
 
-### Save and load the lightweight steering adapter
+### Save and reload the lightweight adapter
 
 ```python
-# Save adapter (~1-5 MB) without model weights
 baker.save("./my_adapter")
 
-# Reload on any machine
 baker2 = Baker.load("./my_adapter")
 responses = baker2.generate(["Tell me about vaccines."], alpha=1.5)
 ```
@@ -201,13 +163,12 @@ responses = baker2.generate(["Tell me about vaccines."], alpha=1.5)
 ## Citation
 
 ```bibtex
-@inproceedings{r2026activationvectors,
-  title     = {Activation Vectors as Weights: Persistent Nudges via Bias Fusion
-               for Library-Free Behavioural Alignment},
-  author    = {R, Kamesh},
-  booktitle = {ICML 2026 Workshop on Weight-Space Symmetries},
-  year      = {2026},
-  url       = {https://github.com/kameshkanna/activation-vectors-as-weights},
+@article{r2026activationvectors,
+  title   = {Activation Vectors as Weights: Persistent Nudges via Bias Fusion
+             for Library-Free Behavioural Alignment},
+  author  = {R, Kamesh},
+  year    = {2026},
+  url     = {https://github.com/kameshkanna/activation-vectors-as-weights},
 }
 ```
 
